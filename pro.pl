@@ -1,11 +1,12 @@
-% Battleship Puzzle Solver AI (v3)
-% Inspired by Conceptis logic puzzle video
-% Dynamic board size + deduction AI
+% Battleship Puzzle Solver AI (v4.2)
+% Fixed version with corrected forall usage
 
 :- dynamic cell/3.
 :- dynamic row_hint/2.
 :- dynamic col_hint/2.
 :- dynamic size/2.
+:- dynamic hidden_ship/2.
+:- dynamic ships_remaining/1.
 :- discontiguous place_random_ships/0.
 
 %------------------------
@@ -26,9 +27,16 @@ init :-
     assert(size(Rows, Cols)),
     place_random_ships,
     calculate_hints_from_board,
-    fill_unknowns.
+    initialize_ai_board,
+    count_ships_remaining.
 
-
+clear :-
+    retractall(cell(_,_,_)),
+    retractall(size(_,_)),
+    retractall(row_hint(_,_)),
+    retractall(col_hint(_,_)),
+    retractall(hidden_ship(_,_)),
+    retractall(ships_remaining(_)).
 
 % Standard battleship fleet for 6x6 board
 % 1 ship of size 3, 2 ships of size 2, 3 ships of size 1
@@ -123,14 +131,16 @@ place_vertical_ship_with_attempts(_, _, _, 0) :-
 
 % Check if we can place a horizontal ship
 can_place_horizontal_ship(Size, R, C) :-
-    forall(between(0, Size, I),
+    Max is Size - 1,
+    forall(between(0, Max, I),
         (C1 is C + I,
          can_place_ship(R, C1))
     ).
 
 % Check if we can place a vertical ship
 can_place_vertical_ship(Size, R, C) :-
-    forall(between(0, Size, I),
+    Max is Size - 1,
+    forall(between(0, Max, I),
         (R1 is R + I,
          can_place_ship(R1, C))
     ).
@@ -138,7 +148,7 @@ can_place_vertical_ship(Size, R, C) :-
 % Place horizontal ship cells
 place_horizontal_ship_cells(0, _, _) :- !.
 place_horizontal_ship_cells(Size, R, C) :-
-    assert(cell(R, C, ship)),
+    assert(hidden_ship(R, C)),
     Size1 is Size - 1,
     C1 is C + 1,
     place_horizontal_ship_cells(Size1, R, C1).
@@ -146,20 +156,21 @@ place_horizontal_ship_cells(Size, R, C) :-
 % Place vertical ship cells
 place_vertical_ship_cells(0, _, _) :- !.
 place_vertical_ship_cells(Size, R, C) :-
-    assert(cell(R, C, ship)),
+    assert(hidden_ship(R, C)),
     Size1 is Size - 1,
     R1 is R + 1,
     place_vertical_ship_cells(Size1, R1, C).
 
 % Check if we can place a ship at given position
 can_place_ship(R, C) :-
-    \+ cell(R, C, ship),  % Position not already occupied
-    \+ has_adjacent_ship(R, C).  % No adjacent ships
+    \+ hidden_ship(R, C),  % Position not already occupied
+    \+ has_adjacent_ship(R, C),  % No adjacent ships
+    within_bounds(R, C).
 
 % Check if there are any orthogonal ships adjacent to the position (no diagonals)
 has_adjacent_ship(R, C) :-
     orthogonal_neighbor(R, C, RN, CN),
-    cell(RN, CN, ship).
+    hidden_ship(RN, CN).
 
 orthogonal_neighbor(R, C, RN, CN) :-
     ( RN is R - 1, CN is C
@@ -169,63 +180,48 @@ orthogonal_neighbor(R, C, RN, CN) :-
     ),
     within_bounds(RN, CN).
 
-
 % Calculate hints based on the randomly placed ships
 calculate_hints_from_board :-
     size(Rows, Cols),
-    calculate_row_hints(Rows),
-    calculate_col_hints(Cols).
+    calculate_row_hints(1, Rows),
+    calculate_col_hints(1, Cols).
 
-calculate_row_hints(0) :- !.
-calculate_row_hints(R) :-
-    size(_, _),
-    findall(C, cell(R, C, ship), Ships),
+calculate_row_hints(R, Rows) :-
+    R =< Rows,
+    findall(C, hidden_ship(R, C), Ships),
     length(Ships, Count),
     assert(row_hint(R, Count)),
-    R1 is R - 1,
-    calculate_row_hints(R1).
+    R1 is R + 1,
+    calculate_row_hints(R1, Rows).
+calculate_row_hints(R, Rows) :- R > Rows.
 
-calculate_col_hints(0) :- !.
-calculate_col_hints(C) :-
-    size(_, _),
-    findall(R, cell(R, C, ship), Ships),
+calculate_col_hints(C, Cols) :-
+    C =< Cols,
+    findall(R, hidden_ship(R, C), Ships),
     length(Ships, Count),
     assert(col_hint(C, Count)),
-    C1 is C - 1,
-    calculate_col_hints(C1).
+    C1 is C + 1,
+    calculate_col_hints(C1, Cols).
+calculate_col_hints(C, Cols) :- C > Cols.
 
-add_hints(Functor, Predicate) :-
-    call(Functor, List),
-    length(List, Length),
-    numlist(1, Length, Indexes),
-    maplist(assert_hint(Predicate), Indexes, List).
-
-assert_hint(Predicate, Index, Value) :-
-    Goal =.. [Predicate, Index, Value],
-    assertz(Goal).
-
-len(List, Length) :- length(List, Length).
-
-clear :-
-    retractall(cell(_,_,_)),
-    retractall(size(_,_)),
-    retractall(row_hint(_,_)),
-    retractall(col_hint(_,_)).
-
-%------------------------
-% Unknown Initialization
-%------------------------
-
-fill_unknowns :-
+% Initialize AI's view of the board (all unknown)
+initialize_ai_board :-
     size(Rows, Cols),
     forall(between(1, Rows, R),
         forall(between(1, Cols, C),
-            ( \+ cell(R,C,_)
-              -> assert(cell(R,C,unknown))
-              ; true
-            )
+            assert(cell(R, C, unknown))
         )
     ).
+
+% Count how many ship cells remain to be discovered
+count_ships_remaining :-
+    findall(1, hidden_ship(_, _), Ships),
+    length(Ships, Total),
+    findall(1, (cell(R, C, ship), hidden_ship(R, C)), Found),
+    length(Found, F),
+    Remaining is Total - F,
+    retractall(ships_remaining(_)),
+    assert(ships_remaining(Remaining)).
 
 %------------------------
 % Main Solve Loop
@@ -234,43 +230,82 @@ fill_unknowns :-
 run :-
     init,
     display_fleet_info,
+    print_board,
     solve.
+
+run_steps(N) :-
+    init,
+    display_fleet_info,
+    print_board,
+    solve_steps(N).
 
 display_fleet_info :-
     size(Rows, Cols),
     get_fleet_for_board(Rows, Cols, Fleet),
     write('Board size: '), write(Rows), write('x'), write(Cols), nl,
-    write('Fleet: '), write(Fleet), nl, nl.
+    write('Fleet: '), write(Fleet), nl,
+    findall(1, hidden_ship(_, _), Ships),
+    length(Ships, Total),
+    write('Total ship cells: '), write(Total), nl, nl.
 
 solve :-
-    solve_loop,
-    (solved -> write('Solved!'), nl ; write('Stuck. Couldn\'t solve.'), nl).
+    solve_loop.
 
 solve_loop :-
+    ships_remaining(Remaining),
+    Remaining > 0,
     apply_rules_once,
     print_board,
     solve_loop.
-solve_loop.  % No more progress
+solve_loop :-
+    ships_remaining(0),
+    write('Solved! All ships found.'), nl.
+
+solve_steps(0) :-
+    ships_remaining(Remaining),
+    (Remaining =:= 0 ->
+        write('All ships found!'), nl
+    ;   write('Stopped after specified steps. '),
+        write(Remaining), write(' ship cells remaining.'), nl
+    ).
+
+solve_steps(N) :-
+    N > 0,
+    ships_remaining(Remaining),
+    Remaining > 0,
+    apply_rules_once,
+    print_board,
+    N1 is N - 1,
+    solve_steps(N1).
 
 %------------------------
 % Apply Deduction Rules
 %------------------------
 
 apply_rules_once :-
-    findall(cell(R,C,V), cell(R,C,V), Before),
-    apply_deduction_rules,
-    findall(cell(R,C,V), cell(R,C,V), After),
-    (Before \= After -> true ; fail).
-
-apply_deduction_rules :-
+    count_ships_remaining,
     rule_zero_row,
     rule_zero_col,
     rule_full_row,
-    rule_full_col.
+    rule_full_col,
+    rule_guess_if_stuck.
 
-%------------------------
+% Rule: Guess a random unknown cell if stuck
+rule_guess_if_stuck :-
+    ships_remaining(Remaining),
+    Remaining > 0,
+    findall(cell(R,C,unknown), cell(R,C,unknown), UnknownCells),
+    UnknownCells \= [],
+    random_member(cell(R,C,unknown), UnknownCells),
+    (hidden_ship(R, C) ->
+        retract(cell(R,C,unknown)),
+        assert(cell(R,C,ship))
+    ;   retract(cell(R,C,unknown)),
+        assert(cell(R,C,water))
+    ),
+    count_ships_remaining.
+
 % Rule: Row Hint is 0 → All water
-%------------------------
 rule_zero_row :-
     row_hint(R, 0),
     size(_, Cols),
@@ -281,9 +316,7 @@ rule_zero_row :-
     fail.
 rule_zero_row.
 
-%------------------------
 % Rule: Column Hint is 0 → All water
-%------------------------
 rule_zero_col :-
     col_hint(C, 0),
     size(Rows, _),
@@ -294,75 +327,41 @@ rule_zero_col :-
     fail.
 rule_zero_col.
 
-%------------------------
 % Rule: Row fully deducible → Mark unknowns as ships
-%------------------------
 rule_full_row :-
     row_hint(R, Count),
     size(_, Cols),
     findall(C, (between(1, Cols, C), cell(R,C,ship)), Ships),
     length(Ships, S),
     UnknownLeft is Count - S,
+    UnknownLeft > 0,
     findall(CU, (between(1, Cols, CU), cell(R,CU,unknown)), UCells),
     length(UCells, UnknownLeft),
     forall(member(C, UCells), (
         retract(cell(R,C,unknown)),
         assert(cell(R,C,ship))
     )),
+    count_ships_remaining,
     fail.
 rule_full_row.
 
-%------------------------
 % Rule: Column fully deducible → Mark unknowns as ships
-%------------------------
 rule_full_col :-
     col_hint(C, Count),
     size(Rows, _),
     findall(R, (between(1, Rows, R), cell(R,C,ship)), Ships),
     length(Ships, S),
     UnknownLeft is Count - S,
+    UnknownLeft > 0,
     findall(RU, (between(1, Rows, RU), cell(RU,C,unknown)), UCells),
     length(UCells, UnknownLeft),
     forall(member(R, UCells), (
         retract(cell(R,C,unknown)),
         assert(cell(R,C,ship))
     )),
+    count_ships_remaining,
     fail.
 rule_full_col.
-
-%------------------------
-% Validation
-%------------------------
-
-check_rule_1 :-  % No touching ships
-    \+ (cell(R,C,ship), neighbor(R,C,RN,CN), cell(RN,CN,ship)).
-
-neighbor(R,C,RN,CN) :-
-    between(-1,1,DR), between(-1,1,DC),
-    (DR \= 0 ; DC \= 0),
-    RN is R + DR, CN is C + DC,
-    within_bounds(RN,CN).
-
-check_rule_2 :-  % Row count matches
-    forall(row_hint(R, Count), (
-        findall(C, cell(R,C,ship), L),
-        length(L, Count)
-    )).
-
-check_rule_3 :-  % Column count matches
-    forall(col_hint(C, Count), (
-        findall(R, cell(R,C,ship), L),
-        length(L, Count)
-    )).
-
-check_rule_4 :-  % No unknowns left
-    \+ cell(_,_,unknown).
-
-solved :-
-    check_rule_1,
-    check_rule_2,
-    check_rule_3,
-    check_rule_4.
 
 %------------------------
 % Printing
@@ -371,22 +370,51 @@ solved :-
 print_board :-
     nl,
     size(Rows, Cols),
-    forall(between(1, Rows, R), (
-        forall(between(1, Cols, C), (
-            cell(R,C,V),
-            print_cell(V)
-        )),
-        row_hint(R, RH),
-        write(' | '), write(RH), nl
-    )),
-    forall(between(1, Cols, C), (
-        col_hint(C, CH),
-        write(' '), write(CH)
-    )), nl, nl.
+    write('  '),
+    print_column_numbers(1, Cols),
+    nl,
+    print_rows(1, Rows, Cols),
+    write('  '),
+    print_column_hints(1, Cols),
+    ships_remaining(Remaining),
+    write('\nShips parts remaining: '), write(Remaining), nl, nl.
 
-print_cell(ship) :- write(' S').
-print_cell(water) :- write(' ~').
-print_cell(unknown) :- write(' ?').
+print_column_numbers(C, Cols) :-
+    C =< Cols,
+    write('   '), write(C),
+    C1 is C + 1,
+    print_column_numbers(C1, Cols).
+print_column_numbers(C, Cols) :- C > Cols.
+
+print_rows(R, Rows, Cols) :-
+    R =< Rows,
+    write(R), write(' '),
+    print_row_cells(R, 1, Cols),
+    row_hint(R, RH),
+    write(' | '), write(RH), nl,
+    R1 is R + 1,
+    print_rows(R1, Rows, Cols).
+print_rows(R, Rows, _) :- R > Rows.
+
+print_row_cells(R, C, Cols) :-
+    C =< Cols,
+    cell(R, C, V),
+    print_cell(V),
+    C1 is C + 1,
+    print_row_cells(R, C1, Cols).
+print_row_cells(_, C, Cols) :- C > Cols.
+
+print_column_hints(C, Cols) :-
+    C =< Cols,
+    col_hint(C, CH),
+    write('   '), write(CH),
+    C1 is C + 1,
+    print_column_hints(C1, Cols).
+print_column_hints(C, Cols) :- C > Cols.
+
+print_cell(ship) :- write('   S').
+print_cell(water) :- write('   ~').
+print_cell(unknown) :- write('   ?').
 
 %------------------------
 % Utility
@@ -395,4 +423,10 @@ print_cell(unknown) :- write(' ?').
 within_bounds(R,C) :-
     size(Rows, Cols),
     R >= 1, R =< Rows,
-    C >= 1, C =< Cols. 
+    C >= 1, C =< Cols.
+
+random_member(X, List) :-
+    length(List, Len),
+    Len > 0,
+    random(0, Len, Index),
+    nth0(Index, List, X).
